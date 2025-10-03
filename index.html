@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Shop Floor Map</title>
+<style>
+  :root { --gap: 14px; --bayHeight: 260px; --markerSize: 26px; }
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; background:#0b0e13; color:#e9eef6; }
+  header { display:flex; align-items:center; justify-content:space-between; padding:12px 16px; border-bottom:1px solid #1d2533; background:#111623; position:sticky; top:0; z-index:10; }
+  .brand { font-weight:700; letter-spacing:.4px; }
+  .controls { display:flex; gap:10px; align-items:center; }
+  button { background:#1e2a44; color:#e9eef6; border:1px solid #2e3b57; border-radius:8px; padding:8px 12px; cursor:pointer; }
+  button:hover { background:#263352; }
+  main { padding:16px; display:grid; grid-template-columns: 1fr 360px; gap:16px; }
+  .mapWrap { display:flex; flex-direction:column; gap:var(--gap); }
+  .bay {
+    position:relative; height:var(--bayHeight); background:#0f1626; border:1px solid #28324a; border-radius:12px;
+    padding:12px; overflow:hidden;
+    background-size:cover; background-position:center;
+  }
+  .bay h2 { margin:0 0 6px 0; font-size:14px; font-weight:600; color:#a9b7d9; position:relative; z-index:1; }
+  .gridBG {
+    position:absolute; inset:0; background-image:linear-gradient(#182038 1px, transparent 1px),
+      linear-gradient(90deg, #182038 1px, transparent 1px);
+    background-size:24px 24px; opacity:.5; pointer-events:none;
+  }
+  .marker {
+    position:absolute; width:var(--markerSize); height:var(--markerSize); border-radius:50%;
+    border:2px solid #0b0e13; transform:translate(-50%, -50%); cursor:grab; display:flex; align-items:center; justify-content:center;
+    font-size:11px; font-weight:700; color:#0b0e13; box-shadow:0 2px 10px rgba(0,0,0,.35);
+  }
+  .marker.dragging { cursor:grabbing; opacity:.85; }
+  .marker .hint { position:absolute; top:28px; left:50%; transform:translateX(-50%); background:#0b1220; border:1px solid #263352; padding:2px 6px; border-radius:6px; font-size:10px; display:none; white-space:nowrap; color:#a9b7d9; }
+  .marker.showHint .hint { display:block; }
+  .panel {
+    background:#0f1626; border:1px solid #28324a; border-radius:12px; padding:12px; height:calc(var(--bayHeight)*3 + var(--gap)*2 + 24px);
+    position:sticky; top:72px; overflow:auto;
+  }
+  .panel h3 { margin:0 0 10px 0; font-size:16px; }
+  .list { display:flex; flex-direction:column; gap:8px; }
+  .card {
+    background:#0b1220; border:1px solid #222c43; border-radius:10px; padding:10px; display:grid; grid-template-columns: 1fr auto; gap:10px; align-items:center;
+  }
+  .small { color:#a9b7d9; font-size:12px; }
+  a { color:#6ee7ff; text-decoration:none; }
+  a:hover { text-decoration:underline; }
+  .pill { padding:2px 8px; border-radius:999px; border:1px solid #2e3b57; background:#121a2e; font-size:11px; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .muted { color:#9db0cc; font-size:12px; }
+  .qr { font-family: ui-monospace, Menlo, Consolas, monospace; background:#0b1220; padding:2px 6px; border-radius:6px; border:1px solid #2e3b57; }
+  select { background:#0b1220; color:#e9eef6; border:1px solid #2e3b57; border-radius:8px; padding:6px; }
+  label input[type="checkbox"] { transform: translateY(1px); }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">Shop Floor Map</div>
+  <div class="controls">
+    <label class="row"><input type="checkbox" id="editToggle" /> <span>Edit Mode</span></label>
+    <button id="addMarkerBtn">Add Whiteboard</button>
+  </div>
+</header>
+
+<main>
+  <section class="mapWrap">
+    <div class="bay" data-bay="A" id="bayA">
+      <div class="gridBG"></div>
+      <h2>Bay A</h2>
+    </div>
+    <div class="bay" data-bay="B" id="bayB">
+      <div class="gridBG"></div>
+      <h2>Bay B</h2>
+    </div>
+    <div class="bay" data-bay="C" id="bayC">
+      <div class="gridBG"></div>
+      <h2>Bay C</h2>
+    </div>
+  </section>
+
+  <aside class="panel">
+    <h3>Whiteboards</h3>
+    <div class="list" id="list"></div>
+  </aside>
+</main>
+
+<script>
+/* =========================
+   CONFIG: Set bay backgrounds here (optional)
+   Replace with your factory layout image URLs when ready.
+   Example: bayBackgrounds.A = 'https://example.com/layoutA.png';
+========================= */
+const bayBackgrounds = { A: '', B: '', C: '' };
+
+/* =========================
+   Local store (swap for Firebase later)
+========================= */
+const STORAGE_KEY = 'shopFloor.v1';
+const byId = (id) => document.getElementById(id);
+const bayEls = { A: byId('bayA'), B: byId('bayB'), C: byId('bayC') };
+
+function defaultState() {
+  return {
+    edit: false,
+    boards: {
+      'WB-A-01': { id:'WB-A-01', label:'WB A-01', bay:'A', x:20, y:30, stage:'Prep' },
+      'WB-B-02': { id:'WB-B-02', label:'WB B-02', bay:'B', x:60, y:50, stage:'Assembly' },
+      'WB-C-03': { id:'WB-C-03', label:'WB C-03', bay:'C', x:40, y:70, stage:'Test' },
+    }
+  };
+}
+function loadState(){ try{ return JSON.parse(localStorage.getItem(STORAGE_KEY)) || defaultState(); }catch{ return defaultState(); } }
+function saveState(){ localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
+let state = loadState();
+
+/* =========================
+   Stage → color
+========================= */
+function stageColor(stage){
+  switch(stage){
+    case 'Prep': return '#3b82f6';     // blue
+    case 'Assembly': return '#22c55e'; // green
+    case 'Test': return '#facc15';     // yellow
+    case 'Rework': return '#ef4444';   // red
+    default: return '#6ee7ff';
+  }
+}
+
+/* =========================
+   Render bays + backgrounds
+========================= */
+function renderBayBackgrounds(){
+  for (const k of ['A','B','C']){
+    const url = bayBackgrounds[k];
+    if (url) {
+      bayEls[k].style.backgroundImage = `url('${url}')`;
+      // Grid stays visible as overlay decoration
+    } else {
+      bayEls[k].style.backgroundImage = '';
+    }
+  }
+}
+
+/* =========================
+   Markers
+========================= */
+function clearMarkers(){ document.querySelectorAll('.marker').forEach(m=>m.remove()); }
+
+function markerEl(board){
+  const m = document.createElement('div');
+  m.className = 'marker';
+  m.style.left = board.x + '%';
+  m.style.top  = board.y + '%';
+  m.style.background = stageColor(board.stage);
+  m.dataset.id = board.id;
+  m.title = `${board.label} — ${board.stage}`;
+  m.innerHTML = `<span>${board.label.replace(/^.*?(\w+-\w+)$/,'$1')}</span><div class="hint">Drag to move</div>`;
+  if (state.edit) m.classList.add('showHint');
+
+  // drag
+  m.addEventListener('pointerdown', (e) => {
+    if (!state.edit) return;
+    m.setPointerCapture(e.pointerId);
+    m.classList.add('dragging');
+    const parent = m.parentElement;
+    const rect = parent.getBoundingClientRect();
+    const onMove = (ev) => {
+      const rx = ((ev.clientX - rect.left) / rect.width) * 100;
+      const ry = ((ev.clientY - rect.top) / rect.height) * 100;
+      const nx = Math.max(2, Math.min(98, rx));
+      const ny = Math.max(6, Math.min(94, ry));
+      m.style.left = nx + '%'; m.style.top = ny + '%';
+    };
+    const onUp = () => {
+      m.releasePointerCapture(e.pointerId);
+      m.classList.remove('dragging');
+      const id = m.dataset.id;
+      state.boards[id].x = parseFloat(m.style.left);
+      state.boards[id].y = parseFloat(m.style.top);
+      saveState();
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  });
+
+  // open board page on click (disabled in edit)
+  m.addEventListener('click', () => {
+    if (state.edit) return;
+    window.location.href = `board.html?board=${encodeURIComponent(board.id)}`;
+  });
+
+  return m;
+}
+
+function renderMarkers(){
+  clearMarkers();
+  Object.values(state.boards).forEach(b=>{
+    const parent = bayEls[b.bay];
+    if (!parent) return;
+    const m = markerEl(b);
+    parent.appendChild(m);
+  });
+}
+
+/* =========================
+   Sidebar list
+========================= */
+function renderList(){
+  const list = byId('list');
+  list.innerHTML = '';
+  const boards = Object.values(state.boards).sort((a,b)=>{
+    if (a.bay === b.bay) return a.id.localeCompare(b.id);
+    return a.bay.localeCompare(b.bay);
+  });
+  boards.forEach(b=>{
+    const card = document.createElement('div'); card.className='card';
+
+    const left = document.createElement('div');
+    left.innerHTML = `
+      <div class="row">
+        <strong>${b.label}</strong>
+        <span class="pill">Bay ${b.bay}</span>
+        <span class="pill">${b.stage}</span>
+      </div>
+      <div class="small">QR path: <span class="qr">/board.html?board=${b.id}</span></div>
+    `;
+
+    const right = document.createElement('div'); right.className='row';
+
+    // Stage select (enabled only in Edit Mode visually; always works here for simplicity)
+    const sel = document.createElement('select');
+    ['Prep','Assembly','Test','Rework'].forEach(st=>{
+      const opt = document.createElement('option');
+      opt.value = st; opt.textContent = st;
+      if (b.stage === st) opt.selected = true;
+      sel.appendChild(opt);
+    });
+    sel.addEventListener('change', ()=>{
+      state.boards[b.id].stage = sel.value;
+      saveState();
+      renderMarkers();
+      renderList();
+    });
+
+    const open = document.createElement('a');
+    open.href = `board.html?board=${encodeURIComponent(b.id)}`;
+    open.textContent = 'Open';
+
+    right.appendChild(sel);
+    right.appendChild(open);
+
+    card.appendChild(left);
+    card.appendChild(right);
+    list.appendChild(card);
+  });
+}
+
+/* =========================
+   Controls
+========================= */
+const editToggle = byId('editToggle');
+editToggle.checked = !!state.edit;
+editToggle.addEventListener('change', ()=>{
+  state.edit = editToggle.checked;
+  saveState();
+  renderMarkers(); renderList();
+});
+
+byId('addMarkerBtn').addEventListener('click', () => {
+  const next = prompt('New whiteboard ID (e.g., WB-B-04):');
+  if (!next) return;
+  if (state.boards[next]) { alert('ID already exists.'); return; }
+  const bay = (prompt('Bay (A/B/C):', 'A') || 'A').toUpperCase();
+  if (!['A','B','C'].includes(bay)) { alert('Invalid bay'); return; }
+  const label = prompt('Label (e.g., WB B-04):', next.replaceAll('-', ' ')) || next;
+  const stage = (prompt('Stage (Prep/Assembly/Test/Rework):', 'Prep') || 'Prep');
+  state.boards[next] = { id: next, label, bay, x: 50, y: 50, stage };
+  saveState(); renderMarkers(); renderList();
+});
+
+/* =========================
+   Init
+========================= */
+renderBayBackgrounds();
+renderMarkers();
+renderList();
+</script>
+</body>
+</html>
