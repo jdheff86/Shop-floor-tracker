@@ -82,6 +82,13 @@
     .panel { position: static; transform:none; height: calc(100vh - 64px); box-shadow:none; border-left:1px solid #28324a; }
     .fab { display:none; }
   }
+  /* prevent the browser from panning/zooming when dragging */
+.canvas, .marker {
+  touch-action: none;
+}
+.wrap {
+  overscroll-behavior: contain; /* reduce bounce on iOS */
+}
 </style>
 </head>
 <body>
@@ -195,32 +202,39 @@ function markerEl(board){
   if (state.edit) m.classList.add('showHint');
 
   // drag
-  m.addEventListener('pointerdown', (e)=>{
-    if (!state.edit) return;
-    m.setPointerCapture(e.pointerId);
-    m.classList.add('dragging');
-    const rect = canvas.getBoundingClientRect();
-    const onMove = (ev)=>{
-      const rx = ((ev.clientX - rect.left) / rect.width) * 100;
-      const ry = ((ev.clientY - rect.top) / rect.height) * 100;
-      const nx = Math.max(1.5, Math.min(98.5, rx));
-      const ny = Math.max(3, Math.min(97, ry));
-      m.style.left = nx + '%'; m.style.top = ny + '%';
-    };
-    const onUp = ()=>{
-      m.releasePointerCapture(e.pointerId);
-      m.classList.remove('dragging');
-      const id = m.dataset.id;
-      state.boards[id].x = parseFloat(m.style.left);
-      state.boards[id].y = parseFloat(m.style.top);
-      saveState();
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-    };
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
-  });
+  m.addEventListener('pointerdown', (e) => {
+  if (!state.edit) return;
+  e.preventDefault();                         // stop scroll start
+  m.setPointerCapture(e.pointerId);
+  m.classList.add('dragging');
 
+  const rect = canvas.getBoundingClientRect();
+
+  const onMove = (ev) => {
+    if (ev.cancelable) ev.preventDefault();   // stop page scrolling while moving
+    const rx = ((ev.clientX - rect.left) / rect.width) * 100;
+    const ry = ((ev.clientY - rect.top) / rect.height) * 100;
+    const nx = Math.max(1.5, Math.min(98.5, rx));
+    const ny = Math.max(3,   Math.min(97,   ry));
+    m.style.left = nx + '%';
+    m.style.top  = ny + '%';
+  };
+
+  const onUp = (ev) => {
+    if (ev.cancelable) ev.preventDefault();
+    m.releasePointerCapture(e.pointerId);
+    m.classList.remove('dragging');
+    const id = m.dataset.id;
+    state.boards[id].x = parseFloat(m.style.left);
+    state.boards[id].y = parseFloat(m.style.top);
+    saveState();
+    window.removeEventListener('pointermove', onMove, { passive:false });
+    window.removeEventListener('pointerup', onUp,     { passive:false });
+  };
+
+  window.addEventListener('pointermove', onMove, { passive:false });
+  window.addEventListener('pointerup', onUp,     { passive:false });
+});
   // click opens board page (disabled in edit)
   m.addEventListener('click', ()=>{
     if (state.edit) return;
