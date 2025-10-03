@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Whiteboard</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin:0; background:#0b0e13; color:#e9eef6; }
+  header { display:flex; align-items:center; justify-content:space-between; padding:12px 16px; border-bottom:1px solid #1d2533; background:#111623; position:sticky; top:0; z-index:10; }
+  a { color:#6ee7ff; text-decoration:none; }
+  a:hover { text-decoration:underline; }
+  main { padding:16px; max-width:1100px; margin:0 auto; }
+  .row { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  .muted { color:#9db0cc; font-size:12px; }
+  .pill { padding:2px 8px; border-radius:999px; border:1px solid #2e3b57; background:#121a2e; font-size:11px; }
+  .panel { background:#0f1626; border:1px solid #28324a; border-radius:12px; padding:12px; margin-top:12px; }
+  .uploader { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  input[type="file"] { background:#0b1220; border:1px solid #2e3b57; border-radius:8px; padding:6px; color:#e9eef6; }
+  button { background:#1e2a44; color:#e9eef6; border:1px solid #2e3b57; border-radius:8px; padding:8px 12px; cursor:pointer; }
+  button:hover { background:#263352; }
+  .note { width:260px; background:#0b1220; border:1px solid #222c43; border-radius:8px; padding:6px; color:#e9eef6; }
+  .dateGroup { margin-top:16px; }
+  .dateGroup h3 { margin:0 0 8px 0; font-size:14px; color:#a9b7d9; }
+  .grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap:10px; }
+  .shot { background:#0b1220; border:1px solid #222c43; border-radius:10px; overflow:hidden; }
+  .shot img { width:100%; height:170px; object-fit:cover; display:block; }
+  .shot a { display:block; padding:6px 8px; font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="row">
+    <a href="index.html">← Map</a>
+    <strong id="title">Whiteboard</strong>
+    <span id="bayPill" class="pill"></span>
+    <span id="stagePill" class="pill"></span>
+  </div>
+  <div class="row">
+    <span class="muted" id="qrHint"></span>
+  </div>
+</header>
+
+<main>
+  <div class="panel">
+    <div class="uploader">
+      <input id="fileInput" type="file" accept="image/*" multiple />
+      <input id="noteInput" class="note" type="text" placeholder="Optional note (e.g., 'Tracker updated')" />
+      <button id="uploadBtn">Upload Photos</button>
+    </div>
+    <div class="muted" style="margin-top:6px">Demo stores images in your browser. For production, we’ll wire SharePoint/Firebase/S3.</div>
+  </div>
+
+  <div id="history"></div>
+</main>
+
+<script>
+const STORE_PREFIX = 'shopFloor.v1';
+const params = new URLSearchParams(location.search);
+const boardId = params.get('board');
+if (!boardId) { alert('Missing ?board=ID'); location.href='index.html'; }
+
+function readMap() {
+  try { return JSON.parse(localStorage.getItem(STORE_PREFIX)) || { boards:{} }; }
+  catch { return { boards:{} }; }
+}
+function writeMap(m) { localStorage.setItem(STORE_PREFIX, JSON.stringify(m)); }
+
+function readBoardData() {
+  try { return JSON.parse(localStorage.getItem(`${STORE_PREFIX}.board.${boardId}`)) || { photos: [] }; }
+  catch { return { photos: [] }; }
+}
+function writeBoardData(data) {
+  localStorage.setItem(`${STORE_PREFIX}.board.${boardId}`, JSON.stringify(data));
+}
+
+const map = readMap();
+const board = map.boards?.[boardId];
+
+const titleEl = document.getElementById('title');
+const bayPill = document.getElementById('bayPill');
+const stagePill = document.getElementById('stagePill');
+const qrHint = document.getElementById('qrHint');
+
+if (!board) {
+  titleEl.textContent = boardId + ' (unregistered)';
+  bayPill.textContent = 'Unknown';
+  stagePill.textContent = '—';
+} else {
+  titleEl.textContent = board.label;
+  bayPill.textContent = 'Bay ' + board.bay;
+  stagePill.textContent = board.stage || '—';
+}
+qrHint.textContent = `QR path: /board.html?board=${boardId}`;
+
+const fileInput = document.getElementById('fileInput');
+const noteInput = document.getElementById('noteInput');
+const uploadBtn = document.getElementById('uploadBtn');
+const historyEl = document.getElementById('history');
+
+uploadBtn.addEventListener('click', async () => {
+  const files = Array.from(fileInput.files || []);
+  if (!files.length) { alert('Select one or more images'); return; }
+  const note = noteInput.value.trim();
+  const data = readBoardData();
+  for (const f of files) {
+    const b64 = await fileToBase64(f);
+    data.photos.push({
+      id: crypto.randomUUID(),
+      date: new Date().toISOString(),
+      name: f.name,
+      note: note || null,
+      href: b64
+    });
+  }
+  writeBoardData(data);
+  fileInput.value = '';
+  noteInput.value = '';
+  renderHistory();
+});
+
+function fileToBase64(file) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(r.result);
+    r.onerror = rej;
+    r.readAsDataURL(file);
+  });
+}
+
+function renderHistory() {
+  const data = readBoardData();
+  const groups = {};
+  for (const p of data.photos) {
+    const d = p.date.slice(0,10);
+    (groups[d] ||= []).push(p);
+  }
+  const dates = Object.keys(groups).sort((a,b)=> b.localeCompare(a)); // newest first
+  historyEl.innerHTML = '';
+  dates.forEach(d => {
+    const wrap = document.createElement('div'); wrap.className = 'dateGroup';
+    const h = document.createElement('h3'); h.textContent = prettyDate(d);
+    wrap.appendChild(h);
+    const grid = document.createElement('div'); grid.className = 'grid';
+    groups[d].sort((a,b)=> b.date.localeCompare(a.date)).forEach(p => {
+      const card = document.createElement('div'); card.className = 'shot';
+      const img = document.createElement('img'); img.src = p.href; img.alt = p.name;
+      const link = document.createElement('a'); link.href = p.href; link.target = '_blank';
+      link.textContent = p.note ? `${p.name} — ${p.note}` : p.name;
+      card.appendChild(img); card.appendChild(link); grid.appendChild(card);
+    });
+    wrap.appendChild(grid);
+    historyEl.appendChild(wrap);
+  });
+}
+
+function prettyDate(isoDateOnly) {
+  const [y,m,d] = isoDateOnly.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m-1, d));
+  return dt.toLocaleDateString(undefined, { year:'numeric', month:'long', day:'numeric' });
+}
+
+renderHistory();
+</script>
+</body>
+</html>
